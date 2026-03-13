@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ╔══════════════════════════════════════════════════════════════════╗
 ║  VALORANT ACCOUNT MANAGER  v5                                   ║
@@ -104,6 +105,101 @@ RIOT_PROCESSES = [
 BACKUP_MAX = 30
 VK_CONTROL = 0x11
 VK_V       = 0x56
+VK_TAB     = 0x09
+VK_RETURN  = 0x0D
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  AUTO LOGIN (Simulated Keyboard)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class AutoLogin:
+    def __init__(self, root: tk.Tk, cfg: Config):
+        self.root = root
+        self.cfg = cfg
+        self._u = self._p = ""
+        self._active = False
+        self._thread = None
+
+    def start(self, user: str, pw: str):
+        self._u, self._p = user, pw
+        self._active = True
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def cancel(self):
+        self._active = False
+        self._u = self._p = ""
+
+    def _send_key(self, vk, down=True):
+        flags = 0 if down else 2
+        ctypes.windll.user32.keybd_event(vk, 0, flags, 0)
+
+    def _paste_string(self, s: str):
+        # Set clipboard and send Ctrl+V
+        self.root.clipboard_clear()
+        self.root.clipboard_append(s)
+        self.root.update_idletasks()
+        time.sleep(0.1)
+        
+        self._send_key(VK_CONTROL, True)
+        self._send_key(0x56, True); self._send_key(0x56, False) # 'V'
+        self._send_key(VK_CONTROL, False)
+        time.sleep(0.1)
+
+    def _loop(self):
+        # Wait for Riot Client to appear and be focused
+        found = False
+        for _ in range(120): # 60 seconds max
+            if not self._active: return
+            
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            
+            title = buf.value.lower()
+            # Strict check: must contain "riot client" and NOT be this manager app
+            if "riot client" in title and "account manager" not in title:
+                found = True
+                break
+            time.sleep(0.5)
+
+        if not found or not self._active: return
+
+        # Wait for UI to stabilize (Customizable)
+        delay = self.cfg.get("auto_paste_delay", 2.0)
+        time.sleep(delay) 
+        
+        if not self._active: return
+
+        # Paste Username
+        self._paste_string(self._u)
+        time.sleep(0.2)
+        
+        # TAB to Password
+        self._send_key(VK_TAB, True); self._send_key(VK_TAB, False)
+        time.sleep(0.2)
+        
+        # Paste Password
+        self._paste_string(self._p)
+        time.sleep(0.2)
+        
+        # TAB 7 times to reach Login button
+        for _ in range(7):
+            self._send_key(VK_TAB, True); self._send_key(VK_TAB, False)
+            time.sleep(0.05)
+        
+        time.sleep(0.2)
+        
+        # ENTER
+        self._send_key(VK_RETURN, True); self._send_key(VK_RETURN, False)
+        
+        # Clear clipboard for security
+        self.root.clipboard_clear()
+        self._active = False
+        self._u = self._p = ""
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -194,6 +290,8 @@ def _dpi_aware():
 _DEF = {
     "session_switching": True,
     "auto_launch": True,
+    "auto_paste": True,
+    "auto_paste_delay": 2.0,
     "auto_backup": True,
     "backup_interval_min": 15,
     "sort_by_recent": True,
@@ -778,6 +876,7 @@ class SettingsDialog(_Dlg):
         for key, label in [
             ("session_switching", "Enable session switching"),
             ("auto_launch",      "Auto-launch Riot Client (visible in toolbar too)"),
+            ("auto_paste",       "Auto-paste credentials (keyboard simulation)"),
             ("auto_backup",      "Automatic periodic backups"),
             ("sort_by_recent",   "Sort non-favorites by most recently used"),
             ("close_guard",      "Warn before closing during paste sequence"),
@@ -787,6 +886,25 @@ class SettingsDialog(_Dlg):
                      font=(FONT, 10)).pack(side="left", fill="x", expand=True)
             t = Toggle(row, initial=cfg.get(key, True))
             t.pack(side="right"); self._togs[key] = t
+
+        tk.Frame(self, bg=T["b1"], height=1).pack(fill="x", padx=24, pady=10)
+        
+        dv = tk.Frame(self, bg=T["bg1"]); dv.pack(fill="x", padx=24)
+        tk.Label(dv, text="Auto-Paste Delay (seconds)", bg=T["bg1"],
+                 fg=T["t1"], font=(FONT, 10)).pack(side="left")
+        
+        self._delay_var = tk.DoubleVar(value=cfg.get("auto_paste_delay", 2.0))
+        self._delay_lbl = tk.Label(dv, text=f"{self._delay_var.get():.1f}s", bg=T["bg1"],
+                                   fg=T["accent"], font=(FONT, 10, "bold"), width=4)
+        self._delay_lbl.pack(side="right")
+        
+        def _update_delay_lbl(val):
+            self._delay_lbl.configure(text=f"{float(val):.1f}s")
+            
+        tk.Scale(dv, from_=1.0, to=10.0, resolution=0.5, orient="horizontal",
+                 variable=self._delay_var, bg=T["bg1"], fg=T["t1"],
+                 highlightthickness=0, bd=0, showvalue=False,
+                 activebackground=T["accent"], command=_update_delay_lbl).pack(side="right", fill="x", expand=True, padx=10)
 
         tk.Frame(self, bg=T["b1"], height=1).pack(fill="x", padx=24, pady=10)
         iv = tk.Frame(self, bg=T["bg1"]); iv.pack(fill="x", padx=24)
@@ -823,6 +941,7 @@ class SettingsDialog(_Dlg):
         for k, t in self._togs.items(): self.cfg.set(k, t.on)
         try: self.cfg.set("backup_interval_min", max(1, int(self._iv.get())))
         except: pass
+        self.cfg.set("auto_paste_delay", self._delay_var.get())
         new = self._tv.get(); old = self.cfg.get("theme", "valorant")
         self.cfg.set("theme", new); self.cfg.save()
         self.result = True; self.destroy()
@@ -894,6 +1013,7 @@ class App:
         self.sessions = Sessions(self.cfg)
         self.auto_bk = AutoBackup(self.cfg)
         self.clip = SmartClip(self.root, self._clip_state)
+        self.autologin = AutoLogin(self.root, self.cfg)
         self._dismiss_id = None
 
         self._search = tk.StringVar()
@@ -940,19 +1060,29 @@ class App:
         badge.pack(side="left", padx=(8,0))
         badge.bind("<Button-1>", lambda e: self._quick_theme())
 
-        # Right side of top bar: auto-launch toggle + settings + backups
+        # Right side of top bar: auto-launch/paste toggles + settings + backups
         tr = tk.Frame(self._topbar, bg=T["bg1"])
         tr.pack(side="right", padx=12)
 
-        # AUTO-LAUNCH TOGGLE (visible in toolbar)
+        # AUTO-LAUNCH TOGGLE
         al_frame = tk.Frame(tr, bg=T["bg1"])
-        al_frame.pack(side="left", padx=(0, 12))
-        tk.Label(al_frame, text="Auto-launch", bg=T["bg1"], fg=T["t3"],
+        al_frame.pack(side="left", padx=(0, 8))
+        tk.Label(al_frame, text="Launch", bg=T["bg1"], fg=T["t3"],
                  font=(FONT, 8)).pack(side="left", padx=(0, 4))
         self._al_toggle = Toggle(
             al_frame, initial=self.cfg.get("auto_launch", True),
             command=self._on_autolaunch_toggle)
         self._al_toggle.pack(side="left")
+
+        # AUTO-PASTE TOGGLE
+        ap_frame = tk.Frame(tr, bg=T["bg1"])
+        ap_frame.pack(side="left", padx=(0, 8))
+        tk.Label(ap_frame, text="Auto-Paste", bg=T["bg1"], fg=T["t3"],
+                 font=(FONT, 8)).pack(side="left", padx=(0, 4))
+        self._ap_toggle = Toggle(
+            ap_frame, initial=self.cfg.get("auto_paste", True),
+            command=self._on_autopaste_toggle)
+        self._ap_toggle.pack(side="left")
 
         Btn(tr, "\u2699", self._open_settings, bg_color=T["bg3"],
             hover_color=T["bg4"], fg_color=T["t2"],
@@ -1009,6 +1139,9 @@ class App:
 
     def _on_autolaunch_toggle(self, val):
         self.cfg.set("auto_launch", val)
+
+    def _on_autopaste_toggle(self, val):
+        self.cfg.set("auto_paste", val)
 
     # ── status bar ───────────────────────────────────────────────────
 
@@ -1105,7 +1238,7 @@ class App:
     # ──────────────────────────────────────────────────────────────────
 
     def _on_click(self, aid):
-        """Click account = copy username to clipboard + start smart paste."""
+        """Click account = copy username to clipboard + start smart paste + autologin."""
         acc = self.cfg.find(aid)
         if not acc: return
         self.cfg.mark_used(aid)
@@ -1114,9 +1247,13 @@ class App:
         # START SMART CLIPBOARD — this is instant and always works
         self.clip.start(acc["username"], acc["password"])
 
+        # START AUTO LOGIN if enabled
+        if self.cfg.get("auto_paste", True):
+            self.autologin.start(acc["username"], acc["password"])
+
         # Also launch Riot if the toggle is on
         if self.cfg.get("auto_launch", True):
-            _launch_riot(open_game=False)
+            _launch_riot(open_game=True)
 
         self._render()
 
