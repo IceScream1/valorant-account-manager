@@ -2,6 +2,11 @@
 
 A professional, lightweight tool designed for players with multiple Valorant accounts. Switch between accounts seamlessly, preserve login sessions, and manage your credentials securely.
 
+## 📸 Preview
+| Main View | Settings View |
+| :---: | :---: |
+| ![Main View](screenshots/main_view.png) | ![Settings View](screenshots/settings_view.png) |
+
 ## 🌟 Key Features
 - **Session Switching:** Swap between accounts without re-entering credentials or auth codes. Snapshot your Riot Client Data once, and switch instantly.
 - **Smart Clipboard:** Click an account to copy the username. Paste it into the Riot Client, and the tool automatically swaps your clipboard to the password for the second paste.
